@@ -25,12 +25,11 @@ jobs:
           --health-retries 5
 
     env:
-      NODE_ENV: test
       DB_HOST: localhost
       DB_PORT: 5432
       DB_USER: notifyhub
       DB_PASSWORD: notifyhub
-      DB_NAME: notifyhub
+      DB_NAME: notifyhub_test
 
     steps:
       - uses: actions/checkout@v4
@@ -42,4 +41,6 @@ jobs:
       - run: npm test
       - name: Run migrations
         run: npx sequelize-cli db:migrate
+        env:
+          NODE_ENV: development
       - run: npm run test:e2e
