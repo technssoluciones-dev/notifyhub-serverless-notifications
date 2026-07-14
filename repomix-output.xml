@@ -1,0 +1,1037 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+api.handler.ts
+app.module.ts
+config.js
+create-notification.dto.ts
+docker-compose.yml
+eventbridge-notification.publisher.ts
+get-notification-status.use-case.ts
+main.ts
+nest-cli.json
+notification-request.entity.spec.ts
+notification-request.entity.ts
+notification-request.model.ts
+notification-worker.handler.ts
+notifications.controller.ts
+notifications.module.ts
+package.json
+ports.ts
+send-notification.use-case.ts
+sequelize-notification.repository.ts
+tenant-id.decorator.ts
+tokens.ts
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="api.handler.ts">
+import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import serverlessExpress from '@vendia/serverless-express';
+import { Callback, Context, Handler } from 'aws-lambda';
+import { AppModule } from '../../app.module';
+
+let cachedServer: Handler;
+
+/**
+ * Reutiliza la instancia de NestJS entre invocaciones (contenedor caliente)
+ * para evitar reconstruir el contenedor de DI en cada request.
+ */
+async function bootstrapServer(): Promise<Handler> {
+  const app = await NestFactory.create(AppModule);
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  await app.init();
+
+  const expressApp = app.getHttpAdapter().getInstance();
+  return serverlessExpress({ app: expressApp });
+}
+
+export const handler: Handler = async (
+  event: unknown,
+  context: Context,
+  callback: Callback,
+) => {
+  cachedServer = cachedServer ?? (await bootstrapServer());
+  return cachedServer(event, context, callback);
+};
+</file>
+
+<file path="app.module.ts">
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { SequelizeModule } from '@nestjs/sequelize';
+import { NotificationsModule } from './notifications/notifications.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    SequelizeModule.forRoot({
+      dialect: 'postgres',
+      host: process.env.DB_HOST ?? 'localhost',
+      port: Number(process.env.DB_PORT ?? 5432),
+      username: process.env.DB_USER ?? 'notifyhub',
+      password: process.env.DB_PASSWORD ?? 'notifyhub',
+      database: process.env.DB_NAME ?? 'notifyhub',
+      autoLoadModels: true,
+      synchronize: false, // las migraciones de sequelize-cli manejan el esquema
+      logging: false,
+    }),
+    NotificationsModule,
+  ],
+})
+export class AppModule {}
+</file>
+
+<file path="config.js">
+require('dotenv').config();
+
+const common = {
+  username: process.env.DB_USER ?? 'notifyhub',
+  password: process.env.DB_PASSWORD ?? 'notifyhub',
+  database: process.env.DB_NAME ?? 'notifyhub',
+  host: process.env.DB_HOST ?? 'localhost',
+  port: Number(process.env.DB_PORT ?? 5432),
+  dialect: 'postgres',
+};
+
+module.exports = {
+  development: common,
+  test: { ...common, database: `${common.database}_test`, logging: false },
+  production: { ...common, logging: false },
+};
+</file>
+
+<file path="create-notification.dto.ts">
+import { ApiProperty } from '@nestjs/swagger';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsObject,
+  IsString,
+  IsUUID,
+} from 'class-validator';
+
+export class CreateNotificationDto {
+  @ApiProperty({ example: 'email', enum: ['email', 'webhook'] })
+  @IsIn(['email', 'webhook'])
+  channel!: 'email' | 'webhook';
+
+  @ApiProperty({ example: 'cliente@empresa.com' })
+  @IsString()
+  @IsNotEmpty()
+  recipient!: string;
+
+  @ApiProperty({ example: 'a3f1e2b0-1234-4a5b-9c3d-000000000001' })
+  @IsUUID()
+  templateId!: string;
+
+  @ApiProperty({
+    example: { orderId: '12345', total: 49990 },
+    description: 'Variables dinamicas que se inyectan en la plantilla',
+  })
+  @IsObject()
+  payload!: Record<string, unknown>;
+}
+</file>
+
+<file path="docker-compose.yml">
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: notifyhub-postgres
+    environment:
+      POSTGRES_USER: notifyhub
+      POSTGRES_PASSWORD: notifyhub
+      POSTGRES_DB: notifyhub
+    ports:
+      - '5432:5432'
+    volumes:
+      - notifyhub_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U notifyhub']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: notifyhub-dynamodb-local
+    command: '-jar DynamoDBLocal.jar -sharedDb -inMemory'
+    ports:
+      - '8000:8000'
+
+volumes:
+  notifyhub_postgres_data:
+</file>
+
+<file path="eventbridge-notification.publisher.ts">
+import {
+  EventBridgeClient,
+  PutEventsCommand,
+} from '@aws-sdk/client-eventbridge';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { NotificationRequest } from '../../domain/notification-request.entity';
+import { NotificationEventPublisher } from '../../domain/ports';
+
+@Injectable()
+export class EventBridgeNotificationPublisher
+  implements NotificationEventPublisher
+{
+  private readonly logger = new Logger(EventBridgeNotificationPublisher.name);
+  private readonly client: EventBridgeClient;
+  private readonly eventBusName: string;
+
+  constructor(private readonly config: ConfigService) {
+    this.client = new EventBridgeClient({
+      region: this.config.get<string>('AWS_REGION', 'us-east-1'),
+    });
+    this.eventBusName = this.config.get<string>(
+      'EVENT_BUS_NAME',
+      'notifyhub-bus',
+    );
+  }
+
+  async publishNotificationRequested(
+    request: NotificationRequest,
+  ): Promise<void> {
+    const props = request.toProps();
+
+    const command = new PutEventsCommand({
+      Entries: [
+        {
+          Source: 'notifyhub.notifications',
+          DetailType: 'NotificationRequested',
+          EventBusName: this.eventBusName,
+          Detail: JSON.stringify({
+            notificationId: props.id,
+            tenantId: props.tenantId,
+            channel: props.channel,
+            recipient: props.recipient,
+            templateId: props.templateId,
+            payload: props.payload,
+          }),
+        },
+      ],
+    });
+
+    const result = await this.client.send(command);
+
+    if (result.FailedEntryCount && result.FailedEntryCount > 0) {
+      this.logger.error(
+        `Fallo al publicar evento para notificacion ${props.id}`,
+      );
+      throw new Error('No se pudo publicar el evento en EventBridge');
+    }
+  }
+}
+</file>
+
+<file path="get-notification-status.use-case.ts">
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { NotificationRepository } from '../../domain/ports';
+import { NOTIFICATION_REPOSITORY } from '../tokens';
+
+export interface GetNotificationStatusOutput {
+  notificationId: string;
+  status: string;
+  attempts: number;
+}
+
+@Injectable()
+export class GetNotificationStatusUseCase {
+  constructor(
+    @Inject(NOTIFICATION_REPOSITORY)
+    private readonly repository: NotificationRepository,
+  ) {}
+
+  async execute(notificationId: string): Promise<GetNotificationStatusOutput> {
+    const request = await this.repository.findById(notificationId);
+
+    if (!request) {
+      throw new NotFoundException(
+        `Notificacion ${notificationId} no encontrada`,
+      );
+    }
+
+    const props = request.toProps();
+    return {
+      notificationId: props.id,
+      status: props.status,
+      attempts: props.attempts,
+    };
+  }
+}
+</file>
+
+<file path="main.ts">
+import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+
+  const config = new DocumentBuilder()
+    .setTitle('NotifyHub API')
+    .setDescription(
+      'Plataforma serverless multi-tenant de notificaciones (email/webhook)',
+    )
+    .setVersion('0.1.0')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('docs', app, document);
+
+  await app.listen(process.env.PORT ?? 3000);
+}
+bootstrap();
+</file>
+
+<file path="nest-cli.json">
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "src",
+  "compilerOptions": {
+    "deleteOutDir": true
+  }
+}
+</file>
+
+<file path="notification-request.entity.spec.ts">
+import { NotificationRequest } from './notification-request.entity';
+
+describe('NotificationRequest (domain)', () => {
+  const validInput = {
+    tenantId: 'tenant-1',
+    channel: 'email' as const,
+    recipient: 'cliente@empresa.com',
+    templateId: 'a3f1e2b0-1234-4a5b-9c3d-000000000001',
+    payload: { orderId: '123' },
+  };
+
+  it('crea la notificacion en estado pending con 0 intentos', () => {
+    const request = NotificationRequest.create(validInput);
+
+    expect(request.status).toBe('pending');
+    expect(request.tenantId).toBe('tenant-1');
+    expect(request.toProps().attempts).toBe(0);
+    expect(request.id).toBeDefined();
+  });
+
+  it('lanza un error si el recipient esta vacio', () => {
+    expect(() =>
+      NotificationRequest.create({ ...validInput, recipient: '  ' }),
+    ).toThrow('recipient es requerido');
+  });
+
+  it('lanza un error si falta templateId', () => {
+    expect(() =>
+      NotificationRequest.create({ ...validInput, templateId: '' }),
+    ).toThrow('templateId es requerido');
+  });
+
+  it('transiciona de pending a queued correctamente', () => {
+    const request = NotificationRequest.create(validInput);
+    request.markQueued();
+    expect(request.status).toBe('queued');
+  });
+
+  it('no permite pasar a queued si no esta en pending', () => {
+    const request = NotificationRequest.create(validInput);
+    request.markQueued();
+
+    expect(() => request.markQueued()).toThrow(
+      'No se puede pasar a queued desde el estado queued',
+    );
+  });
+
+  it('marca como delivered', () => {
+    const request = NotificationRequest.create(validInput);
+    request.markQueued();
+    request.markDelivered();
+    expect(request.status).toBe('delivered');
+  });
+
+  it('pasa a retrying en los dos primeros fallos y a failed en el tercero', () => {
+    const request = NotificationRequest.create(validInput);
+
+    request.markFailed();
+    expect(request.status).toBe('retrying');
+    expect(request.toProps().attempts).toBe(1);
+
+    request.markFailed();
+    expect(request.status).toBe('retrying');
+    expect(request.toProps().attempts).toBe(2);
+
+    request.markFailed();
+    expect(request.status).toBe('failed');
+    expect(request.toProps().attempts).toBe(3);
+  });
+
+  it('restore reconstruye una entidad sin volver a validar invariantes de creacion', () => {
+    const restored = NotificationRequest.restore({
+      id: 'existing-id',
+      tenantId: 'tenant-1',
+      channel: 'webhook',
+      recipient: 'https://tenant.com/webhook',
+      templateId: 'tpl-1',
+      payload: {},
+      status: 'delivered',
+      attempts: 1,
+      createdAt: new Date('2026-01-01'),
+    });
+
+    expect(restored.id).toBe('existing-id');
+    expect(restored.status).toBe('delivered');
+  });
+});
+</file>
+
+<file path="notification-request.entity.ts">
+export type NotificationChannel = 'email' | 'webhook';
+
+export type NotificationStatus =
+  | 'pending'
+  | 'queued'
+  | 'delivered'
+  | 'failed'
+  | 'retrying';
+
+export interface NotificationRequestProps {
+  id: string;
+  tenantId: string;
+  channel: NotificationChannel;
+  recipient: string;
+  templateId: string;
+  payload: Record<string, unknown>;
+  status: NotificationStatus;
+  attempts: number;
+  createdAt: Date;
+}
+
+/**
+ * Entidad de dominio pura. No conoce Sequelize, AWS SDK ni HTTP.
+ * Las reglas de negocio sobre transiciones de estado viven aca,
+ * no en el controller ni en el repositorio.
+ */
+export class NotificationRequest {
+  private constructor(private props: NotificationRequestProps) {}
+
+  static create(input: {
+    tenantId: string;
+    channel: NotificationChannel;
+    recipient: string;
+    templateId: string;
+    payload: Record<string, unknown>;
+  }): NotificationRequest {
+    if (!input.recipient || input.recipient.trim().length === 0) {
+      throw new Error('recipient es requerido');
+    }
+    if (!input.templateId) {
+      throw new Error('templateId es requerido');
+    }
+
+    return new NotificationRequest({
+      id: crypto.randomUUID(),
+      tenantId: input.tenantId,
+      channel: input.channel,
+      recipient: input.recipient,
+      templateId: input.templateId,
+      payload: input.payload ?? {},
+      status: 'pending',
+      attempts: 0,
+      createdAt: new Date(),
+    });
+  }
+
+  static restore(props: NotificationRequestProps): NotificationRequest {
+    return new NotificationRequest(props);
+  }
+
+  markQueued(): void {
+    if (this.props.status !== 'pending') {
+      throw new Error(
+        `No se puede pasar a queued desde el estado ${this.props.status}`,
+      );
+    }
+    this.props.status = 'queued';
+  }
+
+  markDelivered(): void {
+    this.props.status = 'delivered';
+  }
+
+  markFailed(): void {
+    this.props.attempts += 1;
+    this.props.status = this.props.attempts >= 3 ? 'failed' : 'retrying';
+  }
+
+  toProps(): NotificationRequestProps {
+    return { ...this.props };
+  }
+
+  get id(): string {
+    return this.props.id;
+  }
+
+  get tenantId(): string {
+    return this.props.tenantId;
+  }
+
+  get status(): NotificationStatus {
+    return this.props.status;
+  }
+}
+</file>
+
+<file path="notification-request.model.ts">
+import {
+  Column,
+  DataType,
+  Model,
+  PrimaryKey,
+  Table,
+} from 'sequelize-typescript';
+
+@Table({ tableName: 'notification_requests', timestamps: false })
+export class NotificationRequestModel extends Model {
+  @PrimaryKey
+  @Column(DataType.UUID)
+  id!: string;
+
+  @Column({ field: 'tenant_id', type: DataType.UUID, allowNull: false })
+  tenantId!: string;
+
+  @Column({ type: DataType.STRING(20), allowNull: false })
+  channel!: string;
+
+  @Column({ type: DataType.STRING(255), allowNull: false })
+  recipient!: string;
+
+  @Column({ field: 'template_id', type: DataType.UUID, allowNull: false })
+  templateId!: string;
+
+  @Column({ type: DataType.JSONB, allowNull: false, defaultValue: {} })
+  payload!: Record<string, unknown>;
+
+  @Column({ type: DataType.STRING(20), allowNull: false })
+  status!: string;
+
+  @Column({ type: DataType.INTEGER, allowNull: false, defaultValue: 0 })
+  attempts!: number;
+
+  @Column({ field: 'created_at', type: DataType.DATE, allowNull: false })
+  createdAt!: Date;
+}
+</file>
+
+<file path="notification-worker.handler.ts">
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  Context,
+  SQSBatchItemFailure,
+  SQSBatchResponse,
+  SQSEvent,
+} from 'aws-lambda';
+
+const ddbClient = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: process.env.AWS_REGION ?? 'us-east-1' }),
+);
+
+const STATUS_TABLE = process.env.STATUS_TABLE_NAME ?? 'notifyhub-status';
+
+interface NotificationDetail {
+  notificationId: string;
+  tenantId: string;
+  channel: 'email' | 'webhook';
+  recipient: string;
+  templateId: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Cada mensaje de la cola representa una notificacion pendiente.
+ *
+ * Usamos "partial batch failure" (reportBatchItemFailures): si un mensaje
+ * falla, solo ese mensaje vuelve a la cola para reintento; el resto del
+ * batch se marca como procesado. Esto evita que un solo mensaje "malo"
+ * bloquee o duplique el reprocesamiento de todo el batch, y requiere
+ * habilitar `functionResponseTypes: [ReportBatchItemFailures]` en el
+ * event source mapping de Terraform.
+ */
+export const handler = async (
+  event: SQSEvent,
+  _context: Context,
+): Promise<SQSBatchResponse> => {
+  const batchItemFailures: SQSBatchItemFailure[] = [];
+
+  for (const record of event.Records) {
+    try {
+      const detail: NotificationDetail = JSON.parse(record.body);
+      await deliver(detail);
+      await updateStatus(detail.notificationId, 'delivered');
+    } catch (error) {
+      console.error(`Error procesando mensaje ${record.messageId}`, error);
+      try {
+        const detail: NotificationDetail = JSON.parse(record.body);
+        await updateStatus(detail.notificationId, 'retrying');
+      } catch {
+        // si ni siquiera se puede parsear el body, no hay id que actualizar
+      }
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+    }
+  }
+
+  return { batchItemFailures };
+};
+
+async function deliver(detail: NotificationDetail): Promise<void> {
+  if (detail.channel === 'email') {
+    // Aqui iria la llamada real a SNS o a un proveedor de email transaccional.
+    console.log(`Enviando email a ${detail.recipient}`);
+    return;
+  }
+
+  if (detail.channel === 'webhook') {
+    // Aqui iria un fetch/axios POST al endpoint del tenant con backoff.
+    console.log(`Enviando webhook a ${detail.recipient}`);
+    return;
+  }
+
+  throw new Error(`Canal no soportado: ${detail.channel}`);
+}
+
+async function updateStatus(
+  notificationId: string,
+  status: string,
+): Promise<void> {
+  await ddbClient.send(
+    new UpdateCommand({
+      TableName: STATUS_TABLE,
+      Key: { notificationId },
+      UpdateExpression: 'SET #status = :status, updatedAt = :updatedAt',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':status': status,
+        ':updatedAt': new Date().toISOString(),
+      },
+    }),
+  );
+}
+</file>
+
+<file path="notifications.controller.ts">
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { GetNotificationStatusUseCase } from '../../application/use-cases/get-notification-status.use-case';
+import { SendNotificationUseCase } from '../../application/use-cases/send-notification.use-case';
+import { TenantId } from '../../../shared/decorators/tenant-id.decorator';
+import { CreateNotificationDto } from '../dto/create-notification.dto';
+
+@ApiTags('notifications')
+@Controller('notifications')
+export class NotificationsController {
+  constructor(
+    private readonly sendNotification: SendNotificationUseCase,
+    private readonly getStatus: GetNotificationStatusUseCase,
+  ) {}
+
+  @Post()
+  @ApiOperation({
+    summary: 'Encola una notificacion para ser enviada por el canal indicado',
+  })
+  async create(
+    @TenantId() tenantId: string,
+    @Body() dto: CreateNotificationDto,
+  ) {
+    return this.sendNotification.execute({ tenantId, ...dto });
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Consulta el estado de una notificacion' })
+  async findStatus(@Param('id') id: string) {
+    return this.getStatus.execute(id);
+  }
+}
+</file>
+
+<file path="notifications.module.ts">
+import { Module } from '@nestjs/common';
+import { SequelizeModule } from '@nestjs/sequelize';
+import {
+  NOTIFICATION_EVENT_PUBLISHER,
+  NOTIFICATION_REPOSITORY,
+} from './application/tokens';
+import { GetNotificationStatusUseCase } from './application/use-cases/get-notification-status.use-case';
+import { SendNotificationUseCase } from './application/use-cases/send-notification.use-case';
+import { EventBridgeNotificationPublisher } from './infrastructure/messaging/eventbridge-notification.publisher';
+import { NotificationRequestModel } from './infrastructure/persistence/notification-request.model';
+import { SequelizeNotificationRepository } from './infrastructure/persistence/sequelize-notification.repository';
+import { NotificationsController } from './interface/http/notifications.controller';
+
+@Module({
+  imports: [SequelizeModule.forFeature([NotificationRequestModel])],
+  controllers: [NotificationsController],
+  providers: [
+    SendNotificationUseCase,
+    GetNotificationStatusUseCase,
+    { provide: NOTIFICATION_REPOSITORY, useClass: SequelizeNotificationRepository },
+    {
+      provide: NOTIFICATION_EVENT_PUBLISHER,
+      useClass: EventBridgeNotificationPublisher,
+    },
+  ],
+})
+export class NotificationsModule {}
+</file>
+
+<file path="package.json">
+{
+  "name": "notifyhub",
+  "version": "0.1.0",
+  "description": "Plataforma serverless multi-tenant de notificaciones (email/webhook) con NestJS, Lambda y EventBridge",
+  "license": "MIT",
+  "scripts": {
+    "build": "nest build",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:prod": "node dist/main",
+    "lint": "eslint \"{src,test}/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "migrate": "sequelize-cli db:migrate",
+    "migrate:undo": "sequelize-cli db:migrate:undo",
+    "prepare": "husky install"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.0",
+    "@nestjs/config": "^3.2.3",
+    "@nestjs/core": "^10.4.0",
+    "@nestjs/platform-express": "^10.4.0",
+    "@nestjs/sequelize": "^10.0.1",
+    "@nestjs/swagger": "^7.4.0",
+    "@aws-sdk/client-eventbridge": "^3.620.0",
+    "@aws-sdk/client-sqs": "^3.620.0",
+    "@aws-sdk/client-dynamodb": "^3.620.0",
+    "@aws-sdk/lib-dynamodb": "^3.620.0",
+    "@aws-sdk/client-ssm": "^3.620.0",
+    "@vendia/serverless-express": "^4.12.6",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "dotenv": "^16.4.5",
+    "pg": "^8.12.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "sequelize": "^6.37.3",
+    "sequelize-typescript": "^2.1.6",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.4.4",
+    "@nestjs/schematics": "^10.1.3",
+    "@nestjs/testing": "^10.4.0",
+    "@types/aws-lambda": "^8.10.143",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.13",
+    "@types/supertest": "^6.0.2",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.17.0",
+    "@typescript-eslint/parser": "^7.17.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "husky": "^9.1.4",
+    "jest": "^29.7.0",
+    "lint-staged": "^15.2.7",
+    "prettier": "^3.3.3",
+    "sequelize-cli": "^6.6.2",
+    "source-map-support": "^0.5.21",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.2.3",
+    "ts-loader": "^9.5.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.5.4"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  },
+  "jest": {
+    "moduleFileExtensions": ["js", "json", "ts"],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": { "^.+\\.(t|j)s$": "ts-jest" },
+    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  }
+}
+</file>
+
+<file path="ports.ts">
+import { NotificationRequest } from './notification-request.entity';
+
+/**
+ * Puerto de persistencia. La aplicacion depende de esta interfaz,
+ * no de Sequelize directamente (Dependency Inversion).
+ */
+export interface NotificationRepository {
+  save(request: NotificationRequest): Promise<void>;
+  findById(id: string): Promise<NotificationRequest | null>;
+}
+
+/**
+ * Puerto de mensajeria. La implementacion real usa EventBridge (AWS SDK v3),
+ * pero la aplicacion solo conoce esta forma.
+ */
+export interface NotificationEventPublisher {
+  publishNotificationRequested(request: NotificationRequest): Promise<void>;
+}
+
+/**
+ * Puerto de estado rapido (idempotencia). Implementado con DynamoDB.
+ */
+export interface NotificationStatusStore {
+  setStatus(notificationId: string, status: string): Promise<void>;
+  getStatus(notificationId: string): Promise<string | null>;
+}
+</file>
+
+<file path="send-notification.use-case.ts">
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  NotificationChannel,
+  NotificationRequest,
+} from '../../domain/notification-request.entity';
+import {
+  NotificationEventPublisher,
+  NotificationRepository,
+} from '../../domain/ports';
+import {
+  NOTIFICATION_EVENT_PUBLISHER,
+  NOTIFICATION_REPOSITORY,
+} from '../tokens';
+
+export interface SendNotificationInput {
+  tenantId: string;
+  channel: NotificationChannel;
+  recipient: string;
+  templateId: string;
+  payload: Record<string, unknown>;
+}
+
+export interface SendNotificationOutput {
+  notificationId: string;
+  status: string;
+}
+
+@Injectable()
+export class SendNotificationUseCase {
+  constructor(
+    @Inject(NOTIFICATION_REPOSITORY)
+    private readonly repository: NotificationRepository,
+    @Inject(NOTIFICATION_EVENT_PUBLISHER)
+    private readonly publisher: NotificationEventPublisher,
+  ) {}
+
+  async execute(
+    input: SendNotificationInput,
+  ): Promise<SendNotificationOutput> {
+    const request = NotificationRequest.create(input);
+
+    await this.repository.save(request);
+
+    request.markQueued();
+    await this.publisher.publishNotificationRequested(request);
+    await this.repository.save(request);
+
+    return { notificationId: request.id, status: request.status };
+  }
+}
+</file>
+
+<file path="sequelize-notification.repository.ts">
+import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/sequelize';
+import {
+  NotificationChannel,
+  NotificationRequest,
+  NotificationStatus,
+} from '../../domain/notification-request.entity';
+import { NotificationRepository } from '../../domain/ports';
+import { NotificationRequestModel } from './notification-request.model';
+
+@Injectable()
+export class SequelizeNotificationRepository
+  implements NotificationRepository
+{
+  constructor(
+    @InjectModel(NotificationRequestModel)
+    private readonly model: typeof NotificationRequestModel,
+  ) {}
+
+  async save(request: NotificationRequest): Promise<void> {
+    const props = request.toProps();
+    await this.model.upsert({
+      id: props.id,
+      tenantId: props.tenantId,
+      channel: props.channel,
+      recipient: props.recipient,
+      templateId: props.templateId,
+      payload: props.payload,
+      status: props.status,
+      attempts: props.attempts,
+      createdAt: props.createdAt,
+    });
+  }
+
+  async findById(id: string): Promise<NotificationRequest | null> {
+    const row = await this.model.findByPk(id);
+    if (!row) return null;
+
+    return NotificationRequest.restore({
+      id: row.id,
+      tenantId: row.tenantId,
+      channel: row.channel as NotificationChannel,
+      recipient: row.recipient,
+      templateId: row.templateId,
+      payload: row.payload,
+      status: row.status as NotificationStatus,
+      attempts: row.attempts,
+      createdAt: row.createdAt,
+    });
+  }
+}
+</file>
+
+<file path="tenant-id.decorator.ts">
+import {
+  createParamDecorator,
+  ExecutionContext,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { Request } from 'express';
+
+/**
+ * En produccion el tenantId viene de los claims del authorizer de Cognito
+ * (API Gateway los inyecta en requestContext.authorizer.jwt.claims).
+ * En local, se acepta el header x-tenant-id para facilitar el desarrollo.
+ */
+export const TenantId = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): string => {
+    const request = ctx.switchToHttp().getRequest<Request>();
+
+    const claimTenant = (
+      request as unknown as {
+        apiGateway?: {
+          event?: {
+            requestContext?: {
+              authorizer?: { jwt?: { claims?: { tenant_id?: string } } };
+            };
+          };
+        };
+      }
+    ).apiGateway?.event?.requestContext?.authorizer?.jwt?.claims?.tenant_id;
+
+    const headerTenant = request.header('x-tenant-id');
+    const tenantId = claimTenant ?? headerTenant;
+
+    if (!tenantId) {
+      throw new UnauthorizedException('tenantId no encontrado en la solicitud');
+    }
+
+    return tenantId;
+  },
+);
+</file>
+
+<file path="tokens.ts">
+export const NOTIFICATION_REPOSITORY = Symbol('NOTIFICATION_REPOSITORY');
+export const NOTIFICATION_EVENT_PUBLISHER = Symbol(
+  'NOTIFICATION_EVENT_PUBLISHER',
+);
+export const NOTIFICATION_STATUS_STORE = Symbol('NOTIFICATION_STATUS_STORE');
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  }
+}
+</file>
+
+</files>

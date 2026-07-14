@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: notifyhub-postgres
+    environment:
+      POSTGRES_USER: notifyhub
+      POSTGRES_PASSWORD: notifyhub
+      POSTGRES_DB: notifyhub
+    ports:
+      - '5433:5432'
+    volumes:
+      - notifyhub_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U notifyhub']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: notifyhub-dynamodb-local
+    command: '-jar DynamoDBLocal.jar -sharedDb -inMemory'
+    ports:
+      - '8000:8000'
+
+volumes:
+  notifyhub_postgres_data:
