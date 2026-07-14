@@ -142,25 +142,45 @@ npm run build
 
 ## 📡 Endpoints principales
 
+Documentación interactiva vía Swagger disponible en `/api` (según configuración de `main.ts`).
+
 | Método | Ruta | Descripción |
 |---|---|---|
-| `POST` | `/notifications` | Crea y encola una nueva notificación multi-canal |
+| `POST` | `/notifications` | Encola una notificación para ser enviada por el canal indicado |
 | `GET` | `/notifications/:id` | Consulta el estado de una notificación |
 
-Todas las peticiones requieren un identificador de tenant (`tenant-id`) para aislamiento multi-tenant.
+El tenant se resuelve automáticamente en cada request mediante el decorador `@TenantId()`, que se inyecta en el caso de uso junto al resto del payload — no es necesario pasarlo en el body.
+
+### DTO — `CreateNotificationDto`
+
+| Campo | Tipo | Validación | Descripción |
+|---|---|---|---|
+| `channel` | `'email' \| 'webhook'` | `@IsIn(['email', 'webhook'])` | Canal de envío |
+| `recipient` | `string` | `@IsString() @IsNotEmpty()` | Destinatario de la notificación |
+| `templateId` | `string` (UUID) | `@IsUUID()` | Identificador de la plantilla a usar |
+| `payload` | `Record<string, unknown>` | `@IsObject()` | Variables dinámicas inyectadas en la plantilla |
 
 ### Ejemplo de request
 
 ```http
 POST /notifications
 Content-Type: application/json
-x-tenant-id: tenant-123
 
 {
   "channel": "email",
-  "recipient": "usuario@ejemplo.com",
-  "message": "Tu pedido fue confirmado"
+  "recipient": "cliente@empresa.com",
+  "templateId": "a3f1e2b0-1234-4a5b-9c3d-000000000001",
+  "payload": {
+    "orderId": "12345",
+    "total": 49990
+  }
 }
+```
+
+### Consultar estado
+
+```http
+GET /notifications/a3f1e2b0-1234-4a5b-9c3d-000000000001
 ```
 
 ---
