@@ -1,3 +1,4 @@
+﻿import { randomUUID } from 'crypto';
 export type NotificationChannel = 'email' | 'webhook';
 
 export type NotificationStatus =
@@ -42,7 +43,7 @@ export class NotificationRequest {
     }
 
     return new NotificationRequest({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       tenantId: input.tenantId,
       channel: input.channel,
       recipient: input.recipient,
@@ -92,3 +93,4 @@ export class NotificationRequest {
     return this.props.status;
   }
 }
+
