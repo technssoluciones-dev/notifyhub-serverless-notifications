@@ -8,6 +8,30 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: notifyhub
+          POSTGRES_PASSWORD: notifyhub
+          POSTGRES_DB: notifyhub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: notifyhub
+      DB_PASSWORD: notifyhub
+      DB_NAME: notifyhub
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,4 +40,6 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npm test
+      - name: Run migrations
+        run: npx sequelize-cli db:migrate
       - run: npm run test:e2e
